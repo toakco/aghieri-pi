@@ -1,0 +1,53 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/index.html",
+        "headers": [{"key": "Cache-Control", "value": "no-cache, no-store, must-revalidate"}]
+      },
+      {
+        "source": "/flutter_service_worker.js",
+        "headers": [{"key": "Cache-Control", "value": "no-cache, no-store, must-revalidate"}]
+      },
+      {
+        "source": "/main.dart.js",
+        "headers": [{"key": "Cache-Control", "value": "no-cache, no-store, must-revalidate"}]
+      },
+      {
+        "source": "/flutter_bootstrap.js",
+        "headers": [{"key": "Cache-Control", "value": "no-cache, no-store, must-revalidate"}]
+      },
+      {
+        "source": "**/*.@(png|jpg|jpeg|gif|webp|svg|woff|woff2|ttf)",
+        "headers": [{"key": "Cache-Control", "value": "public, max-age=31536000, immutable"}]
+      }
+    ]
+  },
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "aghieri-7a8ce",
+          "configurations": {
+            "android": "1:322776854127:android:fb9e30296388172e8fe79a",
+            "ios": "1:322776854127:ios:b5f0fdcca885d8ae8fe79a",
+            "macos": "1:322776854127:ios:b5f0fdcca885d8ae8fe79a",
+            "web": "1:322776854127:web:63710d72ac5653ec8fe79a",
+            "windows": "1:322776854127:web:ba984cd177552d038fe79a"
+          }
+        }
+      }
+    }
+  }
+}

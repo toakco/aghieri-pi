@@ -1,0 +1,102 @@
+name: aghieri
+description: Aghieri — ADHD Productivity Companion. TOAKCO LLC / DS-483 Capstone.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # ── State Management ──────────────────────────────────────────────────────
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # ── Navigation ────────────────────────────────────────────────────────────
+  go_router: ^14.2.7
+
+  # ── Firebase ──────────────────────────────────────────────────────────────
+  firebase_core: ^3.15.2
+  firebase_auth: ^5.7.0
+  cloud_firestore: ^5.6.12
+  firebase_storage: ^12.4.10
+  firebase_analytics: ^11.3.1
+
+  # ── HTTP ──────────────────────────────────────────────────────────────────
+  http: ^1.2.2
+  dio: ^5.7.0
+  web: ^1.1.0
+
+  # ── Voice ─────────────────────────────────────────────────────────────────
+  just_audio: ^0.9.40       # Audio playback (ElevenLabs TTS)
+  flutter_tts: ^4.2.0       # Native mobile TTS fallback
+  speech_to_text: ^7.0.0    # Platform STT fallback
+  web_socket_channel: ^3.0.1
+
+  # ── Google Sign In / Calendar ─────────────────────────────────────────────
+  google_sign_in: ^6.2.1
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+  googleapis: ^13.2.0
+
+  # ── Apple Sign In ─────────────────────────────────────────────────────────
+  sign_in_with_apple: ^6.1.4
+  crypto: ^3.0.3
+
+  # ── File Handling ─────────────────────────────────────────────────────────
+  file_picker: ^8.1.2
+  image_picker: ^1.1.2
+  path_provider: ^2.1.4
+  path: ^1.9.0
+
+  # ── UI & Animation ────────────────────────────────────────────────────────
+  flutter_animate: ^4.5.0
+  lottie: ^3.1.2
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  flutter_svg: ^2.0.10+1
+
+  # ── Fonts ─────────────────────────────────────────────────────────────────
+  # google_fonts removed — fonts loaded via web/index.html CSS link for web
+  # and via system fallbacks on mobile
+
+  # ── Utilities ────────────────────────────────────────────────────────────
+  shared_preferences: ^2.3.2
+  uuid: ^4.5.1
+  intl: ^0.19.0
+  url_launcher: ^6.3.0
+  permission_handler: ^11.3.1
+  connectivity_plus: ^6.0.5
+
+  # ── Drag & Drop (task reorder) ────────────────────────────────────────────
+  flutter_reorderable_list: ^1.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.12
+  riverpod_generator: ^2.4.3
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  web:
+    generate: true
+  image_path: "assets/app_icon.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+  background_color_ios: "#0A0A0F"
+
+flutter:
+  uses-material-design: true
+
+  # Fonts served via google_fonts package (no local font files needed)
+  # Assets directory created for future image/lottie use
+  assets:
+    - assets/images/
