@@ -18,13 +18,18 @@ class AuthService {
   AuthService._();
   static final instance = AuthService._();
 
-  final _auth = FirebaseAuth.instance;
-  final _db   = FirebaseFirestore.instance;
+  late final _auth = FirebaseAuth.instance;
+  late final _db   = FirebaseFirestore.instance;
 
-  User? get currentUser => _auth.currentUser;
+  User? get currentUser => _isLinux ? null : _auth.currentUser;
   String get uid => _auth.currentUser?.uid ?? 'local';
   bool get isAnonymous => _auth.currentUser?.isAnonymous ?? true;
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<User?> get authStateChanges => _isLinux
+      ? const Stream.empty()
+      : _auth.authStateChanges();
+
+  bool get _isLinux =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
 
   // ── Initialize ─────────────────────────────────────────────────────────────
   Future<void> init() async {

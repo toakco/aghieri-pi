@@ -38,7 +38,9 @@ void main() async {
     );
   }
 
-  await AuthService.instance.init();
+  if (!_isLinuxDesktop) {
+    await AuthService.instance.init();
+  }
 
   // Lock to portrait
   await SystemChrome.setPreferredOrientations([
