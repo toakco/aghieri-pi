@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -225,19 +227,96 @@ class MusicService {
     }
   }
 
-  // ── Spotify (placeholder) ─────────────────────────────────────────────────
+  // ── Spotify ───────────────────────────────────────────────────────────────
   bool get isSpotifyConnected => _spotifyConnected;
-
-  Future<void> connectSpotify() async {
-    // OAuth flow would go here — requires redirect URI setup
-    debugPrint('[MusicService] Spotify OAuth not yet implemented');
-  }
 
   Future<void> disconnectSpotify() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('spotify_connected', false);
     _spotifyConnected = false;
     _broadcast();
+  }
+
+  /// Fetch the user's Spotify playlists using the stored access token.
+  Future<List<SpotifyPlaylistItem>> getUserSpotifyPlaylists() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('spotify_access_token');
+    if (token == null || token.isEmpty) return [];
+
+    try {
+      final resp = await http.get(
+        Uri.parse('https://api.spotify.com/v1/me/playlists?limit=50'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (resp.statusCode != 200) return [];
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final items = (data['items'] as List?) ?? [];
+      return items.map((item) => SpotifyPlaylistItem(
+        id: item['id'] as String? ?? '',
+        name: item['name'] as String? ?? '',
+        imageUrl: ((item['images'] as List?)?.firstOrNull?['url']) as String?,
+      )).where((p) => p.id.isNotEmpty).toList();
+    } catch (e) {
+      debugPrint('[MusicService] Spotify playlists error: $e');
+      return [];
+    }
+  }
+
+  /// Start Spotify playback for a playlist URI via Spotify Connect Web API.
+  Future<void> playSpotifyPlaylist(String playlistId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('spotify_access_token');
+    if (token == null || token.isEmpty) {
+      // Fallback to local ambient tracks
+      await startWakeUpFadeIn();
+      return;
+    }
+
+    try {
+      // Get active device ID
+      final devResp = await http.get(
+        Uri.parse('https://api.spotify.com/v1/me/player/devices'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 5));
+
+      String? deviceId;
+      if (devResp.statusCode == 200) {
+        final devData = jsonDecode(devResp.body) as Map<String, dynamic>;
+        final devices = (devData['devices'] as List?) ?? [];
+        final active = devices.firstWhere(
+          (d) => d['is_active'] == true,
+          orElse: () => devices.isNotEmpty ? devices.first : null,
+        );
+        deviceId = active?['id'] as String?;
+      }
+
+      final uri = playlistId.startsWith('spotify:')
+          ? playlistId
+          : 'spotify:playlist:$playlistId';
+
+      final body = jsonEncode({'context_uri': uri});
+      final playUrl = deviceId != null
+          ? 'https://api.spotify.com/v1/me/player/play?device_id=$deviceId'
+          : 'https://api.spotify.com/v1/me/player/play';
+
+      await http.put(
+        Uri.parse(playUrl),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: body,
+      ).timeout(const Duration(seconds: 8));
+
+      _currentTrack = 'Spotify';
+      _currentArtist = '';
+      _isPlaying = true;
+      _broadcast();
+    } catch (e) {
+      debugPrint('[MusicService] Spotify play error: $e — falling back to ambient');
+      await startWakeUpFadeIn();
+    }
   }
 
   void _broadcast() {
@@ -274,4 +353,15 @@ class _Track {
   final String artist;
   final String url;
   const _Track(this.name, this.artist, this.url);
+}
+
+class SpotifyPlaylistItem {
+  final String id;
+  final String name;
+  final String? imageUrl;
+  const SpotifyPlaylistItem({required this.id, required this.name, this.imageUrl});
+}
+
+extension _ListFirstOrNull<T> on List<T> {
+  T? get firstOrNull => isEmpty ? null : first;
 }

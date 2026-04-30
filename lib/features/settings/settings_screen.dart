@@ -4,7 +4,12 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/device_entry.dart';
+import '../../models/user_profile.dart';
+import '../../services/notification_service.dart';
+import '../../services/profile_service.dart';
 import '../../services/voice_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -20,6 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   _TestState _deviceTest = _TestState.idle;
   _TestState _voiceTest  = _TestState.idle;
   bool _wifiAutoConnect  = true;
+  UserProfile _profile = const UserProfile();
 
   @override
   void initState() {
@@ -29,10 +35,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
+    final profile = await ProfileService.instance.getProfile();
+    if (!mounted) return;
     setState(() {
       _deviceIpCtrl.text = prefs.getString('device_ip') ?? '192.168.1.100';
       _wifiAutoConnect   = prefs.getBool('wifi_auto_connect') ?? true;
+      _profile = profile;
     });
+    // Auto-register this device if not already in profile
+    _ensureThisDeviceRegistered(profile);
+  }
+
+  Future<void> _ensureThisDeviceRegistered(UserProfile profile) async {
+    final token = NotificationService.instance.token;
+    if (token == null) return;
+    final alreadyRegistered = profile.devices.any((d) => d.fcmToken == token);
+    if (alreadyRegistered) return;
+    // Register current device as 'phone' by default
+    final newDevice = DeviceEntry(
+      id: const Uuid().v4(),
+      name: 'My Phone',
+      type: 'phone',
+      fcmToken: token,
+    );
+    final updated = profile.copyWith(devices: [...profile.devices, newDevice]);
+    await ProfileService.instance.saveProfile(updated);
+    if (mounted) setState(() => _profile = updated);
+  }
+
+  Future<void> _saveDevice(DeviceEntry device) async {
+    final idx = _profile.devices.indexWhere((d) => d.id == device.id);
+    List<DeviceEntry> updated;
+    if (idx >= 0) {
+      updated = [..._profile.devices];
+      updated[idx] = device;
+    } else {
+      updated = [..._profile.devices, device];
+    }
+    final newProfile = _profile.copyWith(devices: updated);
+    await ProfileService.instance.saveProfile(newProfile);
+    if (mounted) setState(() => _profile = newProfile);
+  }
+
+  Future<void> _deleteDevice(String id) async {
+    final updated = _profile.devices.where((d) => d.id != id).toList();
+    final newProfile = _profile.copyWith(devices: updated);
+    await ProfileService.instance.saveProfile(newProfile);
+    if (mounted) setState(() => _profile = newProfile);
   }
 
   @override
@@ -92,33 +141,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
         children: [
-
-          // ── Connected Services ──────────────────────────────────────────
-          _Section(
-            label: 'Connected Services',
-            children: [
-              _ServiceStatusTile(
-                icon: Icons.smart_toy_outlined,
-                title: 'Claude AI',
-                subtitle: 'Natural language understanding',
-                status: VoiceService.instance.currentStatus != ConnectivityStatus.offline,
-              ),
-              _ServiceStatusTile(
-                icon: Icons.record_voice_over_outlined,
-                title: 'ElevenLabs — Antonio',
-                subtitle: 'Voice synthesis',
-                status: VoiceService.instance.currentStatus != ConnectivityStatus.offline,
-              ),
-              _ServiceStatusTile(
-                icon: Icons.cloud_outlined,
-                title: 'Firebase',
-                subtitle: 'Authentication & data sync',
-                status: true,
-              ),
-            ],
-          ).animate().fadeIn(delay: 50.ms, duration: 300.ms),
-
-          const SizedBox(height: 20),
 
           // ── Voice ─────────────────────────────────────────────────────────
           _Section(
@@ -321,6 +343,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ).animate().fadeIn(delay: 150.ms, duration: 300.ms),
+
+          const SizedBox(height: 20),
+
+          // ── Devices ──────────────────────────────────────────────────────
+          _DevicesSection(
+            devices: _profile.devices,
+            onSave: _saveDevice,
+            onDelete: _deleteDevice,
+          ).animate().fadeIn(delay: 170.ms, duration: 300.ms),
 
           const SizedBox(height: 20),
 
@@ -798,6 +829,272 @@ class _ServiceStatusTile extends StatelessWidget {
             status ? Icons.check_circle : Icons.cancel_outlined,
             color: status ? AghieriColors.accent : const Color(0xFFE08080),
             size: 18,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Devices section ───────────────────────────────────────────────────────────
+
+IconData _deviceIcon(String type) => switch (type) {
+      'phone'   => Icons.smartphone_outlined,
+      'laptop'  => Icons.laptop_mac_outlined,
+      'desktop' => Icons.desktop_mac_outlined,
+      'tablet'  => Icons.tablet_outlined,
+      _         => Icons.devices_outlined,
+    };
+
+class _DevicesSection extends StatelessWidget {
+  final List<DeviceEntry> devices;
+  final void Function(DeviceEntry) onSave;
+  final void Function(String) onDelete;
+
+  const _DevicesSection({
+    required this.devices,
+    required this.onSave,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('DEVICES', style: AghieriTextStyles.label(size: 11)),
+              GestureDetector(
+                onTap: () => _showDeviceSheet(context, null),
+                child: const Icon(Icons.add, color: AghieriColors.accent, size: 18),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: AghieriColors.surface,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: devices.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    'No devices added. Tap + to register this device.',
+                    style: AghieriTextStyles.caption(),
+                  ),
+                )
+              : Column(
+                  children: devices.asMap().entries.map((e) {
+                    final device = e.value;
+                    return Column(
+                      children: [
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _showDeviceSheet(context, device),
+                            borderRadius: BorderRadius.circular(16),
+                            splashColor: AghieriColors.accent.withOpacity(0.08),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 14),
+                              child: Row(
+                                children: [
+                                  Icon(_deviceIcon(device.type),
+                                      color: AghieriColors.textSecondary, size: 20),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(device.name,
+                                            style: AghieriTextStyles.body(size: 14)),
+                                        Text(device.type,
+                                            style: AghieriTextStyles.caption()),
+                                      ],
+                                    ),
+                                  ),
+                                  if (device.fcmToken != null)
+                                    const Icon(Icons.notifications_active_outlined,
+                                        color: AghieriColors.accent, size: 16),
+                                  const SizedBox(width: 8),
+                                  const Icon(Icons.chevron_right,
+                                      color: AghieriColors.textSecondary, size: 18),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (e.key < devices.length - 1)
+                          const Divider(
+                              height: 1, indent: 52, color: AghieriColors.surfaceHigh),
+                      ],
+                    );
+                  }).toList(),
+                ),
+        ),
+      ],
+    );
+  }
+
+  void _showDeviceSheet(BuildContext context, DeviceEntry? existing) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AghieriColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _DeviceSheet(
+        existing: existing,
+        onSave: onSave,
+        onDelete: existing != null ? () => onDelete(existing.id) : null,
+      ),
+    );
+  }
+}
+
+class _DeviceSheet extends StatefulWidget {
+  final DeviceEntry? existing;
+  final void Function(DeviceEntry) onSave;
+  final VoidCallback? onDelete;
+
+  const _DeviceSheet({this.existing, required this.onSave, this.onDelete});
+
+  @override
+  State<_DeviceSheet> createState() => _DeviceSheetState();
+}
+
+class _DeviceSheetState extends State<_DeviceSheet> {
+  late TextEditingController _nameCtrl;
+  late String _type;
+
+  static const _types = ['phone', 'laptop', 'desktop', 'tablet'];
+  static const _typeLabels = ['Phone', 'Laptop', 'Desktop', 'Tablet'];
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.existing?.name ?? '');
+    _type = widget.existing?.type ?? 'phone';
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36, height: 3,
+              decoration: BoxDecoration(
+                color: AghieriColors.surfaceHigh,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Text(widget.existing == null ? 'Add device' : 'Edit device',
+                  style: AghieriTextStyles.heading(size: 18)),
+              const Spacer(),
+              if (widget.onDelete != null)
+                TextButton(
+                  onPressed: () {
+                    widget.onDelete!();
+                    Navigator.pop(context);
+                  },
+                  child: Text('Remove',
+                      style: AghieriTextStyles.caption(
+                          color: const Color(0xFFE88A6A))),
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _nameCtrl,
+            style: AghieriTextStyles.body(size: 15),
+            decoration: const InputDecoration(hintText: 'Device name'),
+          ),
+          const SizedBox(height: 20),
+          Text('Device type', style: AghieriTextStyles.label()),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(_types.length, (i) {
+              final selected = _type == _types[i];
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() => _type = _types[i]),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? AghieriColors.accent.withOpacity(0.15)
+                          : AghieriColors.surfaceHigh,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: selected
+                            ? AghieriColors.accent
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(_deviceIcon(_types[i]),
+                            color: selected
+                                ? AghieriColors.accent
+                                : AghieriColors.textSecondary,
+                            size: 22),
+                        const SizedBox(height: 4),
+                        Text(_typeLabels[i],
+                            style: AghieriTextStyles.label(
+                              size: 10,
+                              color: selected
+                                  ? AghieriColors.accent
+                                  : AghieriColors.textSecondary,
+                            )),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                final name = _nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                widget.onSave(DeviceEntry(
+                  id: widget.existing?.id ?? const Uuid().v4(),
+                  name: name,
+                  type: _type,
+                  fcmToken: widget.existing?.fcmToken ??
+                      NotificationService.instance.token,
+                ));
+                Navigator.pop(context);
+              },
+              child: const Text('Save device'),
+            ),
           ),
         ],
       ),

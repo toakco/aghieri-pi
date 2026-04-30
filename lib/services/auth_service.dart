@@ -177,6 +177,60 @@ class AuthService {
     }
   }
 
+  // ── Phone Sign-In ──────────────────────────────────────────────────────────
+  /// Step 1 — send SMS. Returns null on success, error string on failure.
+  Future<String?> sendPhoneCode({
+    required String phoneNumber,
+    required void Function(String verificationId) onCodeSent,
+    required void Function(PhoneAuthCredential) onAutoVerified,
+  }) async {
+    String? error;
+    await _auth.verifyPhoneNumber(
+      phoneNumber: phoneNumber,
+      verificationCompleted: (cred) => onAutoVerified(cred),
+      verificationFailed: (e) {
+        error = e.message ?? 'Verification failed.';
+        debugPrint('[Auth] Phone verification failed: $e');
+      },
+      codeSent: (verificationId, _) => onCodeSent(verificationId),
+      codeAutoRetrievalTimeout: (_) {},
+    );
+    return error;
+  }
+
+  /// Step 2 — confirm SMS code. Links to anon account if possible.
+  Future<bool> confirmPhoneCode({
+    required String verificationId,
+    required String smsCode,
+  }) async {
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: smsCode,
+      );
+      final user = _auth.currentUser;
+      if (user != null && user.isAnonymous) {
+        try {
+          await user.linkWithCredential(credential);
+        } on FirebaseAuthException catch (e) {
+          if (e.code == 'credential-already-in-use' ||
+              e.code == 'provider-already-linked') {
+            await _auth.signInWithCredential(credential);
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        await _auth.signInWithCredential(credential);
+      }
+      await _markUpgraded(provider: 'phone');
+      return true;
+    } catch (e) {
+      debugPrint('[Auth] Phone confirm error: $e');
+      return false;
+    }
+  }
+
   Future<void> _markUpgraded({required String provider}) async {
     final user = _auth.currentUser;
     if (user == null) return;

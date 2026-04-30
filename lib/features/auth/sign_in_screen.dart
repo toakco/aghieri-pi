@@ -17,6 +17,13 @@ class SignInScreen extends StatefulWidget {
 class _SignInScreenState extends State<SignInScreen> {
   bool _busy = false;
 
+  // ── Phone auth state ────────────────────────────────────────────────────────
+  bool _phoneMode = false;
+  String _verificationId = '';
+  final _phoneCtrl = TextEditingController();
+  final _codeCtrl  = TextEditingController();
+  bool _codeSent = false;
+
   bool get _appleAvailable {
     if (kIsWeb) return true;
     try {
@@ -33,6 +40,45 @@ class _SignInScreenState extends State<SignInScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     _afterAuth(ok, 'Google');
+  }
+
+  Future<void> _sendPhoneCode() async {
+    final number = _phoneCtrl.text.trim();
+    if (number.isEmpty) return;
+    setState(() => _busy = true);
+    final error = await AuthService.instance.sendPhoneCode(
+      phoneNumber: number,
+      onCodeSent: (id) {
+        if (!mounted) return;
+        setState(() { _verificationId = id; _codeSent = true; _busy = false; });
+      },
+      onAutoVerified: (cred) async {
+        final ok = await AuthService.instance.confirmPhoneCode(
+          verificationId: cred.verificationId ?? '',
+          smsCode: cred.smsCode ?? '',
+        );
+        if (mounted) { setState(() => _busy = false); _afterAuth(ok, 'Phone'); }
+      },
+    );
+    if (error != null && mounted) {
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(error, style: AghieriTextStyles.body(size: 14)),
+        backgroundColor: AghieriColors.surface,
+      ));
+    }
+  }
+
+  Future<void> _confirmCode() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final ok = await AuthService.instance.confirmPhoneCode(
+      verificationId: _verificationId,
+      smsCode: _codeCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _afterAuth(ok, 'Phone');
   }
 
   Future<void> _apple() async {
@@ -92,19 +138,104 @@ class _SignInScreenState extends State<SignInScreen> {
             ),
             const SizedBox(height: 32),
 
-            _AuthButton(
-              label: 'Continue with Google',
-              icon: Icons.g_mobiledata_rounded,
-              onPressed: _busy ? null : _google,
-            ),
-            const SizedBox(height: 12),
-
-            if (_appleAvailable)
+            if (!_phoneMode) ...[
               _AuthButton(
-                label: 'Continue with Apple',
-                icon: Icons.apple_rounded,
-                onPressed: _busy ? null : _apple,
+                label: 'Continue with Google',
+                icon: Icons.g_mobiledata_rounded,
+                onPressed: _busy ? null : _google,
               ),
+              const SizedBox(height: 12),
+              if (_appleAvailable) ...[
+                _AuthButton(
+                  label: 'Continue with Apple',
+                  icon: Icons.apple_rounded,
+                  onPressed: _busy ? null : _apple,
+                ),
+                const SizedBox(height: 12),
+              ],
+              _AuthButton(
+                label: 'Continue with Phone',
+                icon: Icons.phone_outlined,
+                onPressed: _busy ? null : () => setState(() => _phoneMode = true),
+              ),
+            ] else ...[
+              if (!_codeSent) ...[
+                TextField(
+                  controller: _phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  style: AghieriTextStyles.body(size: 16),
+                  decoration: InputDecoration(
+                    hintText: '+1 555 000 0000',
+                    labelText: 'Phone number',
+                    labelStyle: AghieriTextStyles.caption(),
+                    filled: true,
+                    fillColor: AghieriColors.surface,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                    prefixIcon: const Icon(Icons.phone_outlined,
+                        color: AghieriColors.textSecondary, size: 20),
+                  ),
+                  onSubmitted: (_) => _sendPhoneCode(),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity, height: 52,
+                  child: ElevatedButton(
+                    onPressed: _busy ? null : _sendPhoneCode,
+                    child: _busy
+                        ? const SizedBox(width: 20, height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AghieriColors.bg))
+                        : const Text('Send code'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => setState(() => _phoneMode = false),
+                  child: Text('Back', style: AghieriTextStyles.caption()),
+                ),
+              ] else ...[
+                Text('Enter the 6-digit code sent to ${_phoneCtrl.text}',
+                    style: AghieriTextStyles.body(size: 14,
+                        color: AghieriColors.textSecondary)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _codeCtrl,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  style: AghieriTextStyles.heading(size: 28),
+                  textAlign: TextAlign.center,
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: '------',
+                    filled: true,
+                    fillColor: AghieriColors.surface,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  onSubmitted: (_) => _confirmCode(),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity, height: 52,
+                  child: ElevatedButton(
+                    onPressed: _busy ? null : _confirmCode,
+                    child: _busy
+                        ? const SizedBox(width: 20, height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AghieriColors.bg))
+                        : const Text('Verify'),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => setState(() { _codeSent = false; _codeCtrl.clear(); }),
+                  child: Text('Resend code', style: AghieriTextStyles.caption()),
+                ),
+              ],
+            ],
 
             const Spacer(),
 

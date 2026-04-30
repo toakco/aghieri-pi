@@ -2,16 +2,19 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../features/alarms/wakeup_routine.dart';
+import 'music_service.dart';
 import 'voice_service.dart';
 
 /// Alarm — a scheduled time that triggers a voice wake-up.
 class Alarm {
   final String id;
-  final String label;        // e.g. "Good morning" or task title
-  final TimeEntry time;      // hour + minute
-  final List<int> days;      // 0=Mon … 6=Sun, empty = once
+  final String label;             // e.g. "Good morning" or task title
+  final TimeEntry time;           // hour + minute
+  final List<int> days;           // 0=Mon … 6=Sun, empty = once
   bool enabled;
-  final bool isWakeUp;       // triggers morning briefing routine
+  final bool isWakeUp;            // triggers morning briefing routine
+  final List<String> deviceIds;   // which registered devices fire this alarm
+  final String? spotifyPlaylistId; // Spotify playlist URI for wake-up music
 
   Alarm({
     required this.id,
@@ -20,6 +23,8 @@ class Alarm {
     this.days = const [],
     this.enabled = true,
     this.isWakeUp = false,
+    this.deviceIds = const [],
+    this.spotifyPlaylistId,
   });
 
   factory Alarm.fromJson(Map<String, dynamic> j) => Alarm(
@@ -29,6 +34,8 @@ class Alarm {
     days:    List<int>.from(j['days'] ?? []),
     enabled: j['enabled'] as bool? ?? true,
     isWakeUp: j['is_wake_up'] as bool? ?? false,
+    deviceIds: List<String>.from(j['device_ids'] ?? []),
+    spotifyPlaylistId: j['spotify_playlist_id'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -39,6 +46,8 @@ class Alarm {
     'days':    days,
     'enabled': enabled,
     'is_wake_up': isWakeUp,
+    'device_ids': deviceIds,
+    'spotify_playlist_id': spotifyPlaylistId,
   };
 }
 
@@ -169,6 +178,11 @@ class AlarmService {
     if (alarm.days.isEmpty) {
       alarm.enabled = false;
       await _save();
+    }
+
+    // Start Spotify playlist if configured
+    if (alarm.spotifyPlaylistId != null && alarm.spotifyPlaylistId!.isNotEmpty) {
+      await MusicService.instance.playSpotifyPlaylist(alarm.spotifyPlaylistId!);
     }
 
     if (alarm.isWakeUp) {

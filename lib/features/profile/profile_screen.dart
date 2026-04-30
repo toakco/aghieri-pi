@@ -1,6 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
@@ -21,6 +21,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   UserProfile _profile = const UserProfile();
   List<Map<String, dynamic>> _suggestions = [];
   bool _loading = true;
+  bool _uploadingAvatar = false;
 
   @override
   void initState() {
@@ -41,35 +42,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _pickAvatar() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
+    final uid = AuthService.instance.uid;
+    if (uid == 'local') {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Sign in to add a profile photo.',
+              style: AghieriTextStyles.body(size: 14)),
+          backgroundColor: AghieriColors.surface,
+        ));
+      }
+      return;
+    }
+
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 85,
     );
-    if (result == null || result.files.isEmpty) return;
+    if (picked == null) return;
 
-    final bytes = result.files.first.bytes;
-    if (bytes == null) return;
+    final bytes = await picked.readAsBytes();
+    if (bytes.isEmpty) return;
 
+    setState(() => _uploadingAvatar = true);
     try {
-      final uid = AuthService.instance.uid;
       final ref = FirebaseStorage.instance.ref('users/$uid/avatar.jpg');
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
-
       await ProfileService.instance.saveProfile(
         _profile.copyWith(avatarUrl: url),
       );
       _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not upload photo.',
-                style: AghieriTextStyles.body(size: 14)),
-            backgroundColor: AghieriColors.surface,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not upload: ${e.toString().split(']').last.trim()}',
+              style: AghieriTextStyles.body(size: 13)),
+          backgroundColor: AghieriColors.surface,
+        ));
       }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
     }
   }
 
@@ -108,6 +123,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _ProfileHeader(
                   profile: _profile,
                   onAvatarTap: _pickAvatar,
+                  uploading: _uploadingAvatar,
                 ).animate().fadeIn(),
 
                 const SizedBox(height: 28),
@@ -186,7 +202,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 class _ProfileHeader extends StatelessWidget {
   final UserProfile profile;
   final VoidCallback? onAvatarTap;
-  const _ProfileHeader({required this.profile, this.onAvatarTap});
+  final bool uploading;
+  const _ProfileHeader({required this.profile, this.onAvatarTap, this.uploading = false});
 
   @override
   Widget build(BuildContext context) {
@@ -248,7 +265,13 @@ class _ProfileHeader extends StatelessWidget {
                     shape: BoxShape.circle,
                     border: Border.all(color: AghieriColors.bg, width: 2),
                   ),
-                  child: const Icon(Icons.camera_alt, size: 9, color: Colors.white),
+                  child: uploading
+                      ? const Padding(
+                          padding: EdgeInsets.all(3),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: Colors.white),
+                        )
+                      : const Icon(Icons.camera_alt, size: 9, color: Colors.white),
                 ),
               ),
             ],

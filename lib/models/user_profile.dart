@@ -1,4 +1,5 @@
 import 'category_model.dart';
+import 'device_entry.dart';
 
 class UserProfile {
   final String? uid;
@@ -17,6 +18,8 @@ class UserProfile {
   final DateTime? tosAcceptedAt;
   final String? avatarUrl;
   final List<TaskCategory> categories;
+  final List<DeviceEntry> devices;
+  final Map<String, String> topicPlaylists; // interest/topic → Spotify playlist URI
 
   const UserProfile({
     this.uid,
@@ -35,6 +38,8 @@ class UserProfile {
     this.tosAcceptedAt,
     this.avatarUrl,
     this.categories = const [],
+    this.devices = const [],
+    this.topicPlaylists = const {},
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> j) => UserProfile(
@@ -60,6 +65,10 @@ class UserProfile {
     categories: ((j['categories'] as List?) ?? [])
         .map((c) => TaskCategory.fromJson(c as Map<String, dynamic>))
         .toList(),
+    devices: ((j['devices'] as List?) ?? [])
+        .map((d) => DeviceEntry.fromJson(d as Map<String, dynamic>))
+        .toList(),
+    topicPlaylists: Map<String, String>.from(j['topic_playlists'] as Map? ?? {}),
   );
 
   Map<String, dynamic> toJson() => {
@@ -79,6 +88,8 @@ class UserProfile {
     'tos_accepted_at': tosAcceptedAt?.toIso8601String(),
     'avatar_url': avatarUrl,
     'categories': categories.map((c) => c.toJson()).toList(),
+    'devices': devices.map((d) => d.toJson()).toList(),
+    'topic_playlists': topicPlaylists,
   };
 
   UserProfile copyWith({
@@ -97,6 +108,8 @@ class UserProfile {
     DateTime? tosAcceptedAt,
     String? avatarUrl,
     List<TaskCategory>? categories,
+    List<DeviceEntry>? devices,
+    Map<String, String>? topicPlaylists,
   }) => UserProfile(
     uid: uid,
     name: name ?? this.name,
@@ -114,6 +127,8 @@ class UserProfile {
     tosAcceptedAt: tosAcceptedAt ?? this.tosAcceptedAt,
     avatarUrl: avatarUrl ?? this.avatarUrl,
     categories: categories ?? this.categories,
+    devices: devices ?? this.devices,
+    topicPlaylists: topicPlaylists ?? this.topicPlaylists,
   );
 
   String get displayName => preferredName.isNotEmpty ? preferredName : name;

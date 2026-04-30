@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their own profile
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Tasks belong to the owning user
+    match /tasks/{taskId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+        && request.auth.uid == request.resource.data.userId;
+    }
+
+    // Alarms belong to the owning user
+    match /alarms/{alarmId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null
+        && request.auth.uid == request.resource.data.userId;
+    }
+
+    // Interaction tracking — user writes their own, no reads (server-side only)
+    match /interactions/{uid}/{docId} {
+      allow write: if request.auth != null && request.auth.uid == uid;
+      allow read: if false;
+    }
+
+    // Rate limiting — server-managed, no client access
+    match /rate_limits/{uid} {
+      allow read, write: if false;
+    }
+
+    // Admin keys — server-managed only, never client-accessible
+    match /admin_keys/{uid} {
+      allow read, write: if false;
+    }
+
+    // Deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

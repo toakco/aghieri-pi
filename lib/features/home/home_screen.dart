@@ -88,133 +88,9 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) setState(() => _tasks = tasks);
   }
 
-  void _handleCircleTap(BuildContext context, TapUpDetails details) {
-    final circleSize = MediaQuery.of(context).size.width * 0.72;
-    final tapPos = details.localPosition;
-    final cx = circleSize / 2;
-    final cy = circleSize / 2;
-    final moonR = circleSize * 0.42; // must match painter
-
-    // Check if tap is within moon area
-    final dx = tapPos.dx - cx;
-    final dy = tapPos.dy - cy;
-    final dist = sqrt(dx * dx + dy * dy);
-
-    if (dist <= moonR) {
-      // Inverse spherical projection: find tap longitude
-      final sinLat = -dy / moonR;
-      if (sinLat.abs() <= 1.0) {
-        final lat = asin(sinLat.clamp(-1.0, 1.0));
-        final cosLat = cos(lat);
-        if (cosLat.abs() > 0.001) {
-          final sinPhi = dx / (moonR * cosLat);
-          if (sinPhi.abs() <= 1.0) {
-            final tapPhi = asin(sinPhi.clamp(-1.0, 1.0));
-            final now = DateTime.now();
-
-            final wakeMin = _parseTime(_profile.wakeTime);
-            final sleepMin = _parseTime(_profile.sleepTime);
-            int dayDur = sleepMin - wakeMin;
-            if (dayDur <= 0) dayDur += 1440;
-            final nowMin = now.hour * 60 + now.minute;
-            int elapsed = nowMin - wakeMin; if (elapsed < 0) elapsed += 1440;
-            final dayFrac = (elapsed / dayDur).clamp(0.0, 1.0);
-
-            // Tab-aware period (must match painter logic)
-            late final DateTime periodStartDate;
-            late final int totalPeriodMinutes;
-
-            if (_tabIndex == 0) {
-              totalPeriodMinutes = dayDur;
-              periodStartDate = DateTime(now.year, now.month, now.day);
-            } else if (_tabIndex == 1) {
-              final monday = now.subtract(Duration(days: now.weekday - 1));
-              periodStartDate = DateTime(monday.year, monday.month, monday.day);
-              totalPeriodMinutes = 7 * 1440;
-            } else if (_tabIndex == 2) {
-              periodStartDate = DateTime(now.year, now.month, 1);
-              final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-              totalPeriodMinutes = daysInMonth * 1440;
-            } else {
-              periodStartDate = DateTime(now.year, 1, 1);
-              final daysInYear = DateTime(now.year + 1, 1, 1).difference(periodStartDate).inDays;
-              totalPeriodMinutes = daysInYear * 1440;
-            }
-
-            final unscheduled = _tasks.where((t) => t.scheduledTime == null).toList();
-            int unschedIdx = 0;
-
-            for (final task in _tasks) {
-              double sf, ef;
-
-              if (_tabIndex == 0) {
-                if (task.scheduledTime != null) {
-                  final startMin = _parseTime(task.scheduledTime!);
-                  final endMin = task.scheduledEndTime != null
-                      ? _parseTime(task.scheduledEndTime!)
-                      : startMin + 60;
-                  int se = startMin - wakeMin; if (se < 0) se += 1440;
-                  int ee = endMin - wakeMin;   if (ee < 0) ee += 1440;
-                  sf = (se / dayDur).clamp(0.0, 1.0);
-                  ef = (ee / dayDur).clamp(0.0, 1.0);
-                } else {
-                  final n = unscheduled.length;
-                  final futureStart = dayFrac;
-                  final futureRange = (1.0 - futureStart).clamp(0.1, 1.0);
-                  final slotSize = futureRange / (n + 1);
-                  sf = (futureStart + (unschedIdx + 1) * slotSize - slotSize * 0.3).clamp(0.0, 1.0);
-                  ef = (futureStart + (unschedIdx + 1) * slotSize + slotSize * 0.3).clamp(0.0, 1.0);
-                  unschedIdx++;
-                }
-              } else {
-                // Week/Month/Year: position by date + time
-                DateTime taskDate;
-                if (task.dueDate != null) {
-                  final parts = task.dueDate!.split('-');
-                  if (parts.length >= 3) {
-                    taskDate = DateTime(
-                      int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
-                  } else {
-                    taskDate = now;
-                  }
-                } else {
-                  taskDate = now;
-                }
-                final taskStartMin = task.scheduledTime != null
-                    ? _parseTime(task.scheduledTime!) : wakeMin;
-                final taskEndMin = task.scheduledEndTime != null
-                    ? _parseTime(task.scheduledEndTime!) : taskStartMin + 60;
-                final dayOffset = taskDate.difference(periodStartDate).inDays;
-                final startFromPeriod = dayOffset * 1440 + taskStartMin;
-                final endFromPeriod = dayOffset * 1440 + taskEndMin;
-                sf = (startFromPeriod / totalPeriodMinutes).clamp(0.0, 1.0);
-                ef = (endFromPeriod / totalPeriodMinutes).clamp(0.0, 1.0);
-                if ((ef - sf) < 0.005) {
-                  final mid = (sf + ef) / 2;
-                  sf = (mid - 0.0025).clamp(0.0, 1.0);
-                  ef = (mid + 0.0025).clamp(0.0, 1.0);
-                }
-              }
-
-              final phi1 = -pi / 2 + sf * pi;
-              final phi2 = -pi / 2 + ef * pi;
-
-              if (tapPhi >= phi1 && tapPhi <= phi2) {
-                context.push('/focus/${task.id}');
-                return;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // No task hit — toggle voice
-    if (_voiceSessionActive) {
-      _stopVoice();
-    } else {
-      _activateVoice();
-    }
+  double _circleSize(BuildContext context) {
+    final s = MediaQuery.of(context).size;
+    return min(s.width - 48, s.height * 0.55);
   }
 
   bool _voiceSessionActive = false;
@@ -343,23 +219,40 @@ class _HomeScreenState extends State<HomeScreen>
                                 .slideY(begin: 0.05, end: 0, curve: Curves.easeOut),
                             const SizedBox(height: 32),
 
-                            // Circular arc display
+                            // Circular arc display + task overlay dots
                             Center(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onTapUp: (details) => _handleCircleTap(context, details),
+                                // Background tap → voice (task dots absorb their own taps)
+                                onTap: () {
+                                  if (_voiceSessionActive) {
+                                    _stopVoice();
+                                  } else {
+                                    _activateVoice();
+                                  }
+                                },
                                 onLongPress: () => context.push('/aquarium'),
-                                child: Hero(
-                                  tag: 'circular-display',
-                                  child: CircularArcDisplay(
-                                    tasks: _tasks,
-                                    activeTask: _activeTask,
-                                    size: MediaQuery.of(context).size.width * 0.72,
-                                    wakeTime: _profile.wakeTime,
-                                    sleepTime: _profile.sleepTime,
-                                    uiMode: 'abstract',
-                                    tabIndex: _tabIndex,
-                                    isListening: _isListening,
+                                child: SizedBox(
+                                  width: _circleSize(context),
+                                  height: _circleSize(context),
+                                  child: Stack(
+                                    children: [
+                                      Hero(
+                                        tag: 'circular-display',
+                                        child: CircularArcDisplay(
+                                          tasks: _tasks,
+                                          activeTask: _activeTask,
+                                          size: _circleSize(context),
+                                          wakeTime: _profile.wakeTime,
+                                          sleepTime: _profile.sleepTime,
+                                          uiMode: 'abstract',
+                                          tabIndex: _tabIndex,
+                                          isListening: _isListening,
+                                        ),
+                                      ),
+                                      // Tappable task dots positioned on the ring
+                                      ..._buildTaskDots(context),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -484,6 +377,105 @@ class _HomeScreenState extends State<HomeScreen>
         child: const Icon(Icons.add, color: AghieriColors.textPrimary),
       ),
     );
+  }
+
+  /// Build tappable task indicator dots positioned on the ring around the moon.
+  /// Each dot absorbs its own tap → navigate to task. Background tap → voice.
+  List<Widget> _buildTaskDots(BuildContext context) {
+    if (_tasks.isEmpty) return [];
+
+    final sz = _circleSize(context);
+    final cx = sz / 2;
+    final cy = sz / 2;
+    // Dots sit just outside the moon (moonR = sz*0.44), on the voice ring gap
+    final dotR = sz * 0.485;
+    final dotSize = 10.0;
+
+    final now = DateTime.now();
+    final wakeMin = _parseTime(_profile.wakeTime);
+    final sleepMin = _parseTime(_profile.sleepTime);
+    int dayDur = sleepMin - wakeMin;
+    if (dayDur <= 0) dayDur += 1440;
+
+    // Period for non-today tabs
+    late final DateTime periodStart;
+    late final int totalMins;
+    if (_tabIndex == 0) {
+      periodStart = DateTime(now.year, now.month, now.day);
+      totalMins = dayDur;
+    } else if (_tabIndex == 1) {
+      final monday = now.subtract(Duration(days: now.weekday - 1));
+      periodStart = DateTime(monday.year, monday.month, monday.day);
+      totalMins = 7 * 1440;
+    } else if (_tabIndex == 2) {
+      periodStart = DateTime(now.year, now.month, 1);
+      final dim = DateTime(now.year, now.month + 1, 0).day;
+      totalMins = dim * 1440;
+    } else {
+      periodStart = DateTime(now.year, 1, 1);
+      final diy = DateTime(now.year + 1, 1, 1).difference(periodStart).inDays;
+      totalMins = diy * 1440;
+    }
+
+    final dots = <Widget>[];
+    final nowMin = now.hour * 60 + now.minute;
+
+    for (final task in _tasks) {
+      double frac;
+      if (_tabIndex == 0) {
+        final startMin = task.scheduledTime != null
+            ? _parseTime(task.scheduledTime!)
+            : nowMin;
+        int elapsed = startMin - wakeMin;
+        if (elapsed < 0) elapsed += 1440;
+        frac = (elapsed / dayDur).clamp(0.0, 1.0);
+      } else {
+        DateTime taskDate = now;
+        if (task.dueDate != null) {
+          final p = task.dueDate!.split('-');
+          if (p.length >= 3) {
+            taskDate = DateTime(
+                int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
+          }
+        }
+        final taskMin = task.scheduledTime != null
+            ? _parseTime(task.scheduledTime!)
+            : wakeMin;
+        final fromPeriod =
+            taskDate.difference(periodStart).inDays * 1440 + taskMin;
+        frac = (fromPeriod / totalMins).clamp(0.0, 1.0);
+      }
+
+      // Arc spans π → 2π (upper semicircle, left→top→right)
+      final angle = pi + frac * pi;
+      final dx = cx + dotR * cos(angle) - dotSize / 2;
+      final dy = cy + dotR * sin(angle) - dotSize / 2;
+
+      dots.add(Positioned(
+        left: dx,
+        top: dy,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => context.push('/focus/${task.id}'),
+          child: Container(
+            width: dotSize,
+            height: dotSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: task.color,
+              boxShadow: [
+                BoxShadow(
+                  color: task.color.withOpacity(0.7),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+    }
+    return dots;
   }
 
   String _greeting(String name) {
@@ -845,10 +837,11 @@ class _HomeShimmerState extends State<_HomeShimmer>
               const SizedBox(height: 32),
               // Circle placeholder
               Center(
-                child: _ShimmerBox(
-                  width: w * 0.72, height: w * 0.72,
-                  radius: w * 0.36, shimmer: shimmer,
-                ),
+                child: Builder(builder: (ctx) {
+                  final s = MediaQuery.of(ctx).size;
+                  final sz = min(s.width - 48, s.height * 0.55);
+                  return _ShimmerBox(width: sz, height: sz, radius: sz / 2, shimmer: shimmer);
+                }),
               ),
               const SizedBox(height: 32),
               _ShimmerBox(width: 80, height: 16, shimmer: shimmer),

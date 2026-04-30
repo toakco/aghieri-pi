@@ -1210,10 +1210,14 @@ class _AbstractPainter extends CustomPainter {
     //   Month: date positions within month, time determines width
     //   Year:  date positions within year, time determines width
     // Sphere projection: x = R·cos(lat)·sin(lon), y = R·sin(lat)
-    if (tasks.isNotEmpty && dayFrac < 1.0 && !isNight) {
-      final litPath = _moonLitPath(center, br, dayFrac);
+    if (tasks.isNotEmpty && (tabIndex > 0 || (dayFrac < 1.0 && !isNight))) {
+      // For week/month/year: clip to full sphere so all tasks are visible.
+      // For today: clip to the lit (waking) area only.
+      final clipPath = tabIndex == 0
+          ? _moonLitPath(center, br, dayFrac)
+          : (Path()..addOval(Rect.fromCircle(center: center, radius: br)));
       canvas.save();
-      canvas.clipPath(litPath); // ONLY visible in the white/lit area
+      canvas.clipPath(clipPath);
 
       final wakeMin  = _parseTimeMinutes(wakeTime);
       final sleepMin = _parseTimeMinutes(sleepTime);

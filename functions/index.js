@@ -1,29 +1,124 @@
 /**
- * Aghieri — Firebase Cloud Functions
+ * Aghieri — Firebase Cloud Functions (v2 API)
  * TOAKCO LLC / DS-483 Capstone
- *
- * Functions:
- *   processInstruction  — parse uploaded file and extract tasks via Claude
- *   analyzePortfolio    — generate UI suggestions from interaction data
- *   rateLimit           — sliding window rate limiter (100 req/min per uid)
- *   checkIncompleteTasks — end-of-day: flag incomplete tasks for rescheduling
  */
 
-const functions = require("firebase-functions");
-const admin = require("firebase-admin");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onObjectFinalized }  = require("firebase-functions/v2/storage");
+const { onSchedule }         = require("firebase-functions/v2/scheduler");
+const admin    = require("firebase-admin");
 const Anthropic = require("@anthropic-ai/sdk");
-const axios = require("axios");
-const crypto = require("crypto");
+const axios    = require("axios");
+const crypto   = require("crypto");
+
+// ── Weather (OpenWeatherMap) ──────────────────────────────────────────────────
+exports.getWeather = onCall(
+  { secrets: ["OPENWEATHER_API_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    const { lat, lon } = request.data;
+    if (!lat || !lon) throw new HttpsError("invalid-argument", "lat and lon required.");
+
+    const key = process.env.OPENWEATHER_API_KEY;
+    if (!key) throw new HttpsError("failed-precondition", "No weather API key configured.");
+
+    try {
+      const resp = await axios.get("https://api.openweathermap.org/data/2.5/weather", {
+        params: { lat, lon, appid: key, units: "imperial" },
+      });
+      const d = resp.data;
+      const tempF = d.main.temp;
+      const tempC = ((tempF - 32) * 5) / 9;
+
+      return {
+        condition: d.weather[0].main,
+        tempF: Math.round(tempF),
+        tempC: Math.round(tempC),
+        humidity: d.main.humidity,
+        icon: d.weather[0].icon,
+        city: d.name,
+        summary: `${d.weather[0].description}, ${Math.round(tempF)}°F`,
+      };
+    } catch (e) {
+      console.error("Weather fetch error:", e.response?.data || e.message);
+      throw new HttpsError("internal", "Could not fetch weather.");
+    }
+  }
+);
+
+// ── Morning Briefing ──────────────────────────────────────────────────────────
+// Called by client on wake, or by scheduled function at user's wake time.
+// Generates a short AI briefing: weather + tasks + motivational framing.
+exports.getMorningBriefing = onCall(
+  { secrets: ["ANTHROPIC_KEY", "OPENWEATHER_API_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    const uid = request.auth.uid;
+    const { lat, lon } = request.data || {};
+
+    // Fetch today's tasks
+    const today = new Date().toISOString().split("T")[0];
+    const tasksSnap = await db.collection("tasks")
+      .where("uid", "==", uid)
+      .where("status", "in", ["pending", "active"])
+      .limit(5)
+      .get();
+    const tasks = tasksSnap.docs.map(d => d.data().title).filter(Boolean);
+
+    // Fetch user profile for name
+    const userDoc = await db.collection("users").doc(uid).get();
+    const name = userDoc.exists ? (userDoc.data().preferredName || userDoc.data().name || "") : "";
+
+    // Weather (optional — skip if no location)
+    let weatherSummary = "";
+    if (lat && lon && process.env.OPENWEATHER_API_KEY) {
+      try {
+        const w = await axios.get("https://api.openweathermap.org/data/2.5/weather", {
+          params: { lat, lon, appid: process.env.OPENWEATHER_API_KEY, units: "imperial" },
+        });
+        const d = w.data;
+        weatherSummary = `${d.weather[0].description}, ${Math.round(d.main.temp)}°F`;
+      } catch (_) {}
+    }
+
+    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_KEY });
+
+    const prompt = `You are Aghieri, a calm ADHD productivity companion. Generate a short morning briefing (2-3 sentences max) for ${name || "the user"}.
+
+Today: ${today}
+${weatherSummary ? `Weather: ${weatherSummary}` : ""}
+${tasks.length > 0 ? `Today's tasks: ${tasks.join(", ")}` : "No tasks scheduled yet."}
+
+Rules:
+- Warm and grounded, not cheerful or performative
+- Mention the weather naturally if available
+- Reference 1-2 tasks at most, gently
+- End with one short grounding sentence
+- Never use exclamation points or hype words`;
+
+    try {
+      const resp = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 150,
+        messages: [{ role: "user", content: prompt }],
+      });
+      return { briefing: resp.content[0].text.trim(), weather: weatherSummary, tasks };
+    } catch (e) {
+      console.error("Morning briefing error:", e);
+      throw new HttpsError("internal", "Could not generate briefing.");
+    }
+  }
+);
 
 admin.initializeApp();
 const db = admin.firestore();
 
 // ── OAuth config — client IDs are public, secrets live in Secret Manager ────
-const SPOTIFY_CLIENT_ID = "a7a04450126d42e193f0482c1c075df1";
-const NOTION_CLIENT_ID  = "345d872b-594c-8144-adf8-0037e7ef3f13";
+const SPOTIFY_CLIENT_ID  = "a7a04450126d42e193f0482c1c075df1";
+const NOTION_CLIENT_ID   = "345d872b-594c-8144-adf8-0037e7ef3f13";
 const AGHIERI_WEB_ORIGIN = "https://aghieri-7a8ce.web.app";
-const SPOTIFY_REDIRECT = `${AGHIERI_WEB_ORIGIN}/auth/spotify/callback`;
-const NOTION_REDIRECT  = `${AGHIERI_WEB_ORIGIN}/auth/notion/callback`;
+const SPOTIFY_REDIRECT   = `${AGHIERI_WEB_ORIGIN}/auth/spotify/callback`;
+const NOTION_REDIRECT    = `${AGHIERI_WEB_ORIGIN}/auth/notion/callback`;
 const SPOTIFY_SCOPES = [
   "user-read-private", "user-read-email",
   "user-read-playback-state", "user-modify-playback-state",
@@ -32,29 +127,22 @@ const SPOTIFY_SCOPES = [
 ].join(" ");
 
 // ── Rate Limiter ─────────────────────────────────────────────────────────────
-const RATE_LIMIT = 100;      // requests per window
-const WINDOW_MS  = 60_000;   // 1 minute
+const RATE_LIMIT = 100;
+const WINDOW_MS  = 60_000;
 
-exports.rateLimit = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Login required.");
-  }
-  const uid = context.auth.uid;
+exports.rateLimit = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  const uid = request.auth.uid;
   const now = Date.now();
   const windowStart = now - WINDOW_MS;
 
   const ref = db.collection("rate_limits").doc(uid);
   const doc = await ref.get();
-
   let requests = doc.exists ? doc.data().requests || [] : [];
-  // Keep only requests within the current window
   requests = requests.filter(ts => ts > windowStart);
 
   if (requests.length >= RATE_LIMIT) {
-    throw new functions.https.HttpsError(
-      "resource-exhausted",
-      `Rate limit exceeded. Max ${RATE_LIMIT} requests per minute.`
-    );
+    throw new HttpsError("resource-exhausted", `Rate limit exceeded. Max ${RATE_LIMIT} req/min.`);
   }
 
   requests.push(now);
@@ -64,24 +152,21 @@ exports.rateLimit = functions.https.onCall(async (data, context) => {
 
 
 // ── Process Instruction Upload ────────────────────────────────────────────────
-exports.processInstruction = functions
-  .runWith({ memory: "512MB", timeoutSeconds: 120, secrets: ["ANTHROPIC_KEY"] })
-  .storage.object()
-  .onFinalize(async (object) => {
+exports.processInstruction = onObjectFinalized(
+  { memory: "512MiB", timeoutSeconds: 120, secrets: ["ANTHROPIC_KEY"], region: "us-east1" },
+  async (event) => {
+    const object   = event.data;
     const filePath = object.name;
-    const uid = filePath.split("/")[1];  // uploads/{uid}/{fileName}
+    const uid      = filePath.split("/")[1];
 
     if (!filePath.startsWith("uploads/")) return;
 
     const bucket = admin.storage().bucket(object.bucket);
     const [fileContent] = await bucket.file(filePath).download();
     const text = fileContent.toString("utf-8");
-
     if (!text.trim()) return;
 
-    const client = new Anthropic.default({
-      apiKey: functions.config().anthropic?.key || process.env.ANTHROPIC_KEY,
-    });
+    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_KEY });
 
     let tasks = [];
     try {
@@ -93,7 +178,6 @@ exports.processInstruction = functions
           content: `Extract all actionable tasks from this document. Return JSON array: [{"title": "short title (under 6 words)", "steps": ["step 1", "step 2"], "estimated_minutes": 30}]. Only JSON.\n\n${text.slice(0, 6000)}`,
         }],
       });
-
       let content = resp.content[0].text.trim();
       if (content.startsWith("```")) {
         content = content.split("```")[1];
@@ -105,7 +189,6 @@ exports.processInstruction = functions
       return;
     }
 
-    // Write tasks to Firestore
     const batch = db.batch();
     for (const task of tasks) {
       const ref = db.collection("tasks").doc();
@@ -113,7 +196,7 @@ exports.processInstruction = functions
         uid,
         title: task.title || "Untitled",
         steps: (task.steps || []).map((s, i) => ({ id: `s${i}`, text: s, completed: false })),
-        color: null,       // App assigns color
+        color: null,
         status: "pending",
         source: "upload",
         created_at: new Date().toISOString(),
@@ -123,56 +206,42 @@ exports.processInstruction = functions
     }
     await batch.commit();
     console.log(`Created ${tasks.length} tasks for user ${uid}`);
-  });
+  }
+);
 
 
 // ── Analyze Portfolio & Generate Suggestions ──────────────────────────────────
-exports.analyzePortfolio = functions
-  .runWith({ secrets: ["ANTHROPIC_KEY"] })
-  .https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Login required.");
-  }
+exports.analyzePortfolio = onCall(
+  { secrets: ["ANTHROPIC_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    const uid = request.auth.uid;
 
-  const uid = context.auth.uid;
+    const interactionsSnap = await db
+      .collection("portfolio").doc(uid).collection("interactions")
+      .orderBy("timestamp", "desc").limit(100).get();
 
-  // Fetch last 100 interactions — anonymized (no PII sent to Claude)
-  const interactionsSnap = await db
-    .collection("portfolio")
-    .doc(uid)
-    .collection("interactions")
-    .orderBy("timestamp", "desc")
-    .limit(100)
-    .get();
+    const interactions = interactionsSnap.docs.map(d => d.data());
+    if (interactions.length < 10) return { suggestions: [] };
 
-  const interactions = interactionsSnap.docs.map(d => d.data());
-  if (interactions.length < 10) {
-    return { suggestions: [] };
-  }
+    const hourCounts = {};
+    const typeCounts = {};
+    for (const i of interactions) {
+      const h = i.hour_of_day || 12;
+      const t = i.type || "unknown";
+      hourCounts[h] = (hourCounts[h] || 0) + 1;
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
 
-  // Aggregate pattern data
-  const hourCounts = {};
-  const typeCounts = {};
-  for (const i of interactions) {
-    const h = i.hour_of_day || 12;
-    const t = i.type || "unknown";
-    hourCounts[h] = (hourCounts[h] || 0) + 1;
-    typeCounts[t] = (typeCounts[t] || 0) + 1;
-  }
+    const peakHour = Object.entries(hourCounts).sort(([,a],[,b]) => b-a)[0]?.[0] || 12;
+    const topType  = Object.entries(typeCounts).sort(([,a],[,b]) => b-a)[0]?.[0] || "task";
 
-  const peakHour = Object.entries(hourCounts).sort(([,a],[,b]) => b-a)[0]?.[0] || 12;
-  const topType  = Object.entries(typeCounts).sort(([,a],[,b]) => b-a)[0]?.[0] || "task";
+    const userDoc   = await db.collection("users").doc(uid).get();
+    const interests = userDoc.exists ? (userDoc.data().interests || []) : [];
 
-  // Fetch user interests (non-PII)
-  const userDoc = await db.collection("users").doc(uid).get();
-  const interests = userDoc.exists ? (userDoc.data().interests || []) : [];
+    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_KEY });
 
-  const client = new Anthropic.default({
-    apiKey: functions.config().anthropic?.key || process.env.ANTHROPIC_KEY,
-  });
-
-  // TRIBE v2 analysis framework applied here
-  const prompt = `Analyze interaction patterns using TRIBE v2 framework.
+    const prompt = `Analyze interaction patterns using TRIBE v2 framework.
 
 Data:
 - Peak activity hour: ${peakHour}:00
@@ -185,63 +254,50 @@ Generate 1-2 short, practical UI suggestions for a calm ADHD productivity app.
 Rules: no judgment, no performance framing, practical and specific.
 Format: JSON array [{"suggestion": "...", "reason": "..."}]. Only JSON.`;
 
-  try {
-    const resp = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 600,
-      messages: [{ role: "user", content: prompt }],
-    });
+    try {
+      const resp = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 600,
+        messages: [{ role: "user", content: prompt }],
+      });
 
-    let content = resp.content[0].text.trim();
-    if (content.startsWith("```")) {
-      content = content.split("```")[1];
-      if (content.startsWith("json")) content = content.slice(4);
+      let content = resp.content[0].text.trim();
+      if (content.startsWith("```")) {
+        content = content.split("```")[1];
+        if (content.startsWith("json")) content = content.slice(4);
+      }
+      const suggestions = JSON.parse(content);
+
+      await db.collection("users").doc(uid).update({
+        ui_suggestions: suggestions,
+        suggestions_generated_at: new Date().toISOString(),
+      });
+
+      return { suggestions };
+    } catch (e) {
+      console.error("Portfolio analysis error:", e);
+      return { suggestions: [] };
     }
-    const suggestions = JSON.parse(content);
-
-    // Store suggestions in Firestore
-    await db.collection("users").doc(uid).update({
-      ui_suggestions: suggestions,
-      suggestions_generated_at: new Date().toISOString(),
-    });
-
-    return { suggestions };
-  } catch (e) {
-    console.error("Portfolio analysis error:", e);
-    return { suggestions: [] };
   }
-});
+);
 
 
-// ── Voice Command Proxy (Claude) — bypasses CORS for web ────────────────────
-exports.voiceCommand = functions
-  .runWith({
-    memory: "256MB",
-    timeoutSeconds: 30,
-    minInstances: 1,
-    secrets: ["ANTHROPIC_KEY"],
-  })
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Login required.");
-    }
+// ── Voice Command Proxy (Claude) ─────────────────────────────────────────────
+exports.voiceCommand = onCall(
+  { memory: "256MiB", timeoutSeconds: 30, minInstances: 1, secrets: ["ANTHROPIC_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
 
-    // Accept either full message history or single transcript
-    let messages = data.messages;
-    if (!messages && data.transcript) {
-      messages = [{ role: "user", content: data.transcript }];
+    let messages = request.data.messages;
+    if (!messages && request.data.transcript) {
+      messages = [{ role: "user", content: request.data.transcript }];
     }
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      throw new functions.https.HttpsError("invalid-argument", "messages or transcript required.");
+      throw new HttpsError("invalid-argument", "messages or transcript required.");
     }
 
-    // Server-side key is authoritative. Client key (if any) is ignored.
-    const apiKey = functions.config().anthropic?.key
-      || process.env.ANTHROPIC_KEY
-      || data.claudeKey;
-    if (!apiKey) {
-      throw new functions.https.HttpsError("failed-precondition", "No Claude API key configured on the server.");
-    }
+    const apiKey = process.env.ANTHROPIC_KEY || request.data.claudeKey;
+    if (!apiKey) throw new HttpsError("failed-precondition", "No Claude API key configured.");
 
     const client = new Anthropic.default({ apiKey });
 
@@ -283,28 +339,23 @@ For anything that is not task creation, respond in-character as Aghieri in one o
       return { response: text };
     } catch (e) {
       console.error("voiceCommand Claude error:", e);
-      throw new functions.https.HttpsError("internal", "Claude API call failed.");
+      throw new HttpsError("internal", "Claude API call failed.");
     }
-  });
+  }
+);
 
 
-// ── Task Step Breakdown (Claude) — web-safe, used by focus screen ──────────
-exports.breakdownTask = functions
-  .runWith({ memory: "256MB", timeoutSeconds: 30, secrets: ["ANTHROPIC_KEY"] })
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Login required.");
-    }
+// ── Task Step Breakdown ──────────────────────────────────────────────────────
+exports.breakdownTask = onCall(
+  { memory: "256MiB", timeoutSeconds: 30, secrets: ["ANTHROPIC_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
 
-    const content = (data.content || "").toString().trim();
-    if (!content) {
-      throw new functions.https.HttpsError("invalid-argument", "content required.");
-    }
+    const content = (request.data.content || "").toString().trim();
+    if (!content) throw new HttpsError("invalid-argument", "content required.");
 
     const apiKey = process.env.ANTHROPIC_KEY;
-    if (!apiKey) {
-      throw new functions.https.HttpsError("failed-precondition", "No Claude key configured.");
-    }
+    if (!apiKey) throw new HttpsError("failed-precondition", "No Claude key configured.");
 
     const client = new Anthropic.default({ apiKey });
 
@@ -336,48 +387,37 @@ ${content.slice(0, 2000)}`,
         tasks = JSON.parse(text);
       } catch (e) {
         console.error("breakdownTask parse error:", e, "raw:", text);
-        throw new functions.https.HttpsError("internal", "Could not parse step breakdown.");
+        throw new HttpsError("internal", "Could not parse step breakdown.");
       }
 
       return { tasks };
     } catch (e) {
-      if (e.code) throw e; // Re-throw HttpsError
+      if (e.code) throw e;
       console.error("breakdownTask Claude error:", e);
-      throw new functions.https.HttpsError("internal", "Claude API call failed.");
+      throw new HttpsError("internal", "Claude API call failed.");
     }
-  });
+  }
+);
 
 
-// ── Text-to-Speech Proxy (ElevenLabs) — bypasses CORS for web ──────────────
-exports.textToSpeech = functions
-  .runWith({
-    memory: "512MB",
-    timeoutSeconds: 30,
-    minInstances: 1,
-    secrets: ["ELEVENLABS_API_KEY"],
-  })
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Login required.");
-    }
+// ── Text-to-Speech Proxy (ElevenLabs) ────────────────────────────────────────
+exports.textToSpeech = onCall(
+  { memory: "512MiB", timeoutSeconds: 30, minInstances: 1, secrets: ["ELEVENLABS_API_KEY"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
 
-    const text = data.text;
-    const voiceId = data.voiceId || "iLVmqjzCGGvqtMCk6vVQ";
-
-    // Server-side key is authoritative. Client key is only a last-resort fallback.
-    const elevenLabsKey = functions.config().elevenlabs?.key
-      || process.env.ELEVENLABS_API_KEY
-      || data.elevenLabsKey;
+    const text    = request.data.text;
+    const voiceId = request.data.voiceId || "iLVmqjzCGGvqtMCk6vVQ";
+    const elevenLabsKey = process.env.ELEVENLABS_API_KEY || request.data.elevenLabsKey;
 
     if (!text || typeof text !== "string") {
-      throw new functions.https.HttpsError("invalid-argument", "text required.");
+      throw new HttpsError("invalid-argument", "text required.");
     }
     if (!elevenLabsKey) {
-      throw new functions.https.HttpsError("failed-precondition", "No ElevenLabs API key configured on the server.");
+      throw new HttpsError("failed-precondition", "No ElevenLabs API key configured.");
     }
 
     try {
-      // eleven_flash_v2_5 — ~75ms first-byte latency vs ~250ms for turbo.
       const resp = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`,
         {
@@ -403,73 +443,58 @@ exports.textToSpeech = functions
       if (!resp.ok) {
         const errText = await resp.text();
         console.error("ElevenLabs TTS error:", resp.status, errText);
-        throw new functions.https.HttpsError("internal", `ElevenLabs error ${resp.status}`);
+        throw new HttpsError("internal", `ElevenLabs error ${resp.status}`);
       }
 
-      const arrayBuf = await resp.arrayBuffer();
+      const arrayBuf  = await resp.arrayBuffer();
       const base64Audio = Buffer.from(arrayBuf).toString("base64");
       return { audio: base64Audio };
     } catch (e) {
-      if (e instanceof functions.https.HttpsError) throw e;
+      if (e instanceof HttpsError) throw e;
       console.error("textToSpeech error:", e);
-      throw new functions.https.HttpsError("internal", "ElevenLabs TTS call failed.");
+      throw new HttpsError("internal", "ElevenLabs TTS call failed.");
     }
-  });
+  }
+);
 
 
-// ── End-of-Day Incomplete Task Check ──────────────────────────────────────────
-// Runs daily at 9pm EST — checks for incomplete due tasks
-exports.checkIncompleteTasks = functions
-  .runWith({ secrets: ["ANTHROPIC_KEY"] })
-  .pubsub
-  .schedule("0 21 * * *")
-  .timeZone("America/New_York")
-  .onRun(async () => {
+// ── End-of-Day Incomplete Task Check ─────────────────────────────────────────
+exports.checkIncompleteTasks = onSchedule(
+  { schedule: "0 21 * * *", timeZone: "America/New_York", secrets: ["ANTHROPIC_KEY"] },
+  async () => {
     const today = new Date().toISOString().split("T")[0];
 
-    // Find all tasks due today that are still pending
     const tasksSnap = await db.collection("tasks")
       .where("due_date", "==", today)
       .where("status", "in", ["pending", "active"])
       .get();
 
-    const client = new Anthropic.default({
-      apiKey: functions.config().anthropic?.key || process.env.ANTHROPIC_KEY,
-    });
-
     for (const doc of tasksSnap.docs) {
       const task = doc.data();
-      const uid = task.uid;
+      const uid  = task.uid;
       if (!uid) continue;
 
-      // Mark as needing reschedule (app will prompt user)
-      await doc.ref.update({
-        status: "needs_reschedule",
-        reschedule_prompted: false,
-      });
+      await doc.ref.update({ status: "needs_reschedule", reschedule_prompted: false });
 
-      // Write a notification document for the app to pick up
-      await db.collection("users").doc(uid)
-        .collection("notifications").add({
-          type: "reschedule_prompt",
-          task_id: doc.id,
-          task_title: task.title,
-          message: `${task.title} didn't make it today — want to find it a spot?`,
-          created_at: new Date().toISOString(),
-          read: false,
-        });
+      await db.collection("users").doc(uid).collection("notifications").add({
+        type: "reschedule_prompt",
+        task_id: doc.id,
+        task_title: task.title,
+        message: `${task.title} didn't make it today — want to find it a spot?`,
+        created_at: new Date().toISOString(),
+        read: false,
+      });
     }
 
     console.log(`Incomplete task check: flagged ${tasksSnap.size} tasks.`);
-  });
+  }
+);
+
 
 // ── OAuth: Spotify ───────────────────────────────────────────────────────────
-
-exports.spotifyAuthStart = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Login required.");
-  }
-  const uid = context.auth.uid;
+exports.spotifyAuthStart = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  const uid   = request.auth.uid;
   const state = crypto.randomBytes(24).toString("hex");
 
   await db.collection("oauth_states").doc(state).set({
@@ -489,32 +514,27 @@ exports.spotifyAuthStart = functions.https.onCall(async (data, context) => {
   return { url, state };
 });
 
-exports.spotifyAuthCallback = functions
-  .runWith({ secrets: ["SPOTIFY_CLIENT_SECRET"] })
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Login required.");
-    }
-    const uid = context.auth.uid;
-    const code  = data?.code;
-    const state = data?.state;
-    if (!code || !state) {
-      throw new functions.https.HttpsError("invalid-argument", "Missing code or state.");
-    }
+exports.spotifyAuthCallback = onCall(
+  { secrets: ["SPOTIFY_CLIENT_SECRET"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    const uid   = request.auth.uid;
+    const code  = request.data?.code;
+    const state = request.data?.state;
+    if (!code || !state) throw new HttpsError("invalid-argument", "Missing code or state.");
 
     const stateRef = db.collection("oauth_states").doc(state);
     const stateDoc = await stateRef.get();
-    if (!stateDoc.exists) {
-      throw new functions.https.HttpsError("permission-denied", "Invalid or expired state.");
-    }
+    if (!stateDoc.exists) throw new HttpsError("permission-denied", "Invalid or expired state.");
+
     const stateData = stateDoc.data();
     if (stateData.uid !== uid || stateData.provider !== "spotify") {
-      throw new functions.https.HttpsError("permission-denied", "State mismatch.");
+      throw new HttpsError("permission-denied", "State mismatch.");
     }
     await stateRef.delete();
 
     const secret = process.env.SPOTIFY_CLIENT_SECRET;
-    const basic = Buffer.from(`${SPOTIFY_CLIENT_ID}:${secret}`).toString("base64");
+    const basic  = Buffer.from(`${SPOTIFY_CLIENT_ID}:${secret}`).toString("base64");
 
     let tokenResp;
     try {
@@ -525,16 +545,11 @@ exports.spotifyAuthCallback = functions
           code,
           redirect_uri: SPOTIFY_REDIRECT,
         }).toString(),
-        {
-          headers: {
-            "Authorization": `Basic ${basic}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-        }
+        { headers: { "Authorization": `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" } }
       );
     } catch (err) {
       console.error("Spotify token exchange failed:", err.response?.data || err.message);
-      throw new functions.https.HttpsError("internal", "Spotify token exchange failed.");
+      throw new HttpsError("internal", "Spotify token exchange failed.");
     }
 
     const { access_token, refresh_token, expires_in, scope, token_type } = tokenResp.data;
@@ -567,15 +582,14 @@ exports.spotifyAuthCallback = functions
       }, { merge: true });
 
     return { connected: true, profile };
-  });
-
-// ── OAuth: Notion ────────────────────────────────────────────────────────────
-
-exports.notionAuthStart = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Login required.");
   }
-  const uid = context.auth.uid;
+);
+
+
+// ── OAuth: Notion ─────────────────────────────────────────────────────────────
+exports.notionAuthStart = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+  const uid   = request.auth.uid;
   const state = crypto.randomBytes(24).toString("hex");
 
   await db.collection("oauth_states").doc(state).set({
@@ -594,65 +608,41 @@ exports.notionAuthStart = functions.https.onCall(async (data, context) => {
   return { url, state };
 });
 
-exports.notionAuthCallback = functions
-  .runWith({ secrets: ["NOTION_CLIENT_SECRET"] })
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Login required.");
-    }
-    const uid = context.auth.uid;
-    const code  = data?.code;
-    const state = data?.state;
-    if (!code || !state) {
-      throw new functions.https.HttpsError("invalid-argument", "Missing code or state.");
-    }
+exports.notionAuthCallback = onCall(
+  { secrets: ["NOTION_CLIENT_SECRET"] },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
+    const uid   = request.auth.uid;
+    const code  = request.data?.code;
+    const state = request.data?.state;
+    if (!code || !state) throw new HttpsError("invalid-argument", "Missing code or state.");
 
     const stateRef = db.collection("oauth_states").doc(state);
     const stateDoc = await stateRef.get();
-    if (!stateDoc.exists) {
-      throw new functions.https.HttpsError("permission-denied", "Invalid or expired state.");
-    }
+    if (!stateDoc.exists) throw new HttpsError("permission-denied", "Invalid or expired state.");
+
     const stateData = stateDoc.data();
     if (stateData.uid !== uid || stateData.provider !== "notion") {
-      throw new functions.https.HttpsError("permission-denied", "State mismatch.");
+      throw new HttpsError("permission-denied", "State mismatch.");
     }
     await stateRef.delete();
 
     const secret = process.env.NOTION_CLIENT_SECRET;
-    const basic = Buffer.from(`${NOTION_CLIENT_ID}:${secret}`).toString("base64");
+    const basic  = Buffer.from(`${NOTION_CLIENT_ID}:${secret}`).toString("base64");
 
     let tokenResp;
     try {
       tokenResp = await axios.post(
         "https://api.notion.com/v1/oauth/token",
-        {
-          grant_type: "authorization_code",
-          code,
-          redirect_uri: NOTION_REDIRECT,
-        },
-        {
-          headers: {
-            "Authorization": `Basic ${basic}`,
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28",
-          },
-        }
+        { grant_type: "authorization_code", code, redirect_uri: NOTION_REDIRECT },
+        { headers: { "Authorization": `Basic ${basic}`, "Content-Type": "application/json", "Notion-Version": "2022-06-28" } }
       );
     } catch (err) {
       console.error("Notion token exchange failed:", err.response?.data || err.message);
-      throw new functions.https.HttpsError("internal", "Notion token exchange failed.");
+      throw new HttpsError("internal", "Notion token exchange failed.");
     }
 
-    const {
-      access_token,
-      token_type,
-      bot_id,
-      workspace_id,
-      workspace_name,
-      workspace_icon,
-      owner,
-      duplicated_template_id,
-    } = tokenResp.data;
+    const { access_token, token_type, bot_id, workspace_id, workspace_name, workspace_icon, owner, duplicated_template_id } = tokenResp.data;
 
     await db.collection("users").doc(uid)
       .collection("integrations").doc("notion").set({
@@ -668,9 +658,72 @@ exports.notionAuthCallback = functions
         connected_at: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
 
-    return {
-      connected: true,
-      workspace_name,
-      workspace_icon,
-    };
+    return { connected: true, workspace_name, workspace_icon };
+  }
+);
+
+
+// ── Push Notifications ────────────────────────────────────────────────────────
+
+exports.sendTaskReminder = onCall(async (request) => {
+  const { uid, taskId, taskTitle, minutesBefore = 15 } = request.data;
+  if (!uid || !taskId) return { sent: false };
+
+  const userDoc = await db.collection("users").doc(uid).get();
+  const profile = userDoc.exists ? userDoc.data() : {};
+  const tokens  = (profile.devices || []).filter(d => d.fcm_token).map(d => d.fcm_token);
+
+  if (tokens.length === 0) return { sent: false };
+
+  const result = await admin.messaging().sendEachForMulticast({
+    notification: { title: `Starting in ${minutesBefore} min`, body: taskTitle || "Task coming up" },
+    data: { type: "task", id: taskId },
+    tokens,
   });
+  return { sent: true, successCount: result.successCount };
+});
+
+exports.sendStatsUpdate = onCall(async (request) => {
+  const { uid } = request.data;
+  if (!uid) return { sent: false };
+
+  const userDoc = await db.collection("users").doc(uid).get();
+  const tokens  = ((userDoc.exists ? userDoc.data() : {}).devices || [])
+    .filter(d => d.fcm_token).map(d => d.fcm_token);
+
+  if (tokens.length === 0) return { sent: false };
+
+  await admin.messaging().sendEachForMulticast({
+    notification: { title: "Your focus stats are in", body: "See how your week looked →" },
+    data: { type: "stats", id: uid },
+    tokens,
+  });
+  return { sent: true };
+});
+
+exports.sendAlarmNotification = onCall(async (request) => {
+  const { uid, alarmId, alarmLabel, deviceIds = [] } = request.data;
+  if (!uid) return { sent: false };
+
+  const userDoc    = await db.collection("users").doc(uid).get();
+  const allDevices = (userDoc.exists ? userDoc.data() : {}).devices || [];
+
+  const targets = deviceIds.length > 0
+    ? allDevices.filter(d => deviceIds.includes(d.id) && d.fcm_token)
+    : allDevices.filter(d => d.fcm_token);
+
+  const tokens = targets.map(d => d.fcm_token);
+  if (tokens.length === 0) return { sent: false };
+
+  await admin.messaging().sendEachForMulticast({
+    notification: { title: alarmLabel || "Alarm", body: "Tap to open Aghieri" },
+    android: { priority: "high" },
+    apns: {
+      payload: { aps: { sound: "default", contentAvailable: true } },
+      headers: { "apns-priority": "10" },
+    },
+    data: { type: "alarm", id: alarmId || "" },
+    tokens,
+  });
+  return { sent: true };
+});

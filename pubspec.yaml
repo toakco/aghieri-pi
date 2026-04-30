@@ -26,6 +26,7 @@ dependencies:
   cloud_firestore: ^5.6.12
   firebase_storage: ^12.4.10
   firebase_analytics: ^11.3.1
+  firebase_messaging: ^15.0.0
 
   # ── HTTP ──────────────────────────────────────────────────────────────────
   http: ^1.2.2
@@ -74,6 +75,8 @@ dependencies:
 
   # ── Drag & Drop (task reorder) ────────────────────────────────────────────
   flutter_reorderable_list: ^1.0.1
+  firebase_app_check: ^0.3.2+10
+  cloud_functions: ^5.6.2
 
 dev_dependencies:
   flutter_test:
