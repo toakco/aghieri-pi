@@ -1,5 +1,6 @@
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -15,22 +16,27 @@ import 'services/notification_service.dart';
 import 'services/voice_service.dart';
 import 'services/weather_service.dart';
 
+bool get _isLinuxDesktop =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Use clean path URLs (no #) so OAuth redirect URIs work as registered.
-  usePathUrlStrategy();
+  if (!_isLinuxDesktop) {
+    usePathUrlStrategy();
+  }
 
-  // Initialize Firebase + anonymous auth
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  if (!_isLinuxDesktop) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug,
-    appleProvider: AppleProvider.deviceCheck,
-    webProvider: ReCaptchaV3Provider('6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI'),
-  );
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: AndroidProvider.debug,
+      appleProvider: AppleProvider.deviceCheck,
+      webProvider: ReCaptchaV3Provider('6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI'),
+    );
+  }
 
   await AuthService.instance.init();
 
@@ -50,22 +56,14 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   AghieriTextStyles.setMode(prefs.getString('typography_mode') ?? 'default');
 
-  // Load saved API keys + device IP
-  await VoiceService.instance.init();
-
-  // Start alarm service (checks every 30s)
-  await AlarmService.instance.init();
-
-  // FCM push notifications (no-op on web)
-  await NotificationService.instance.init();
-
-  // Music service
-  await MusicService.instance.init();
-
-  // Weather cache
-  await WeatherService.instance.init();
-
-  InteractionTracker.instance.track(InteractionType.appOpened);
+  if (!_isLinuxDesktop) {
+    await VoiceService.instance.init();
+    await AlarmService.instance.init();
+    await NotificationService.instance.init();
+    await MusicService.instance.init();
+    await WeatherService.instance.init();
+    InteractionTracker.instance.track(InteractionType.appOpened);
+  }
 
   runApp(const AghieriApp());
 }
