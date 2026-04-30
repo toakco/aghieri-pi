@@ -9,7 +9,7 @@ class InteractionTracker {
   InteractionTracker._();
   static final instance = InteractionTracker._();
 
-  final _db = FirebaseFirestore.instance;
+  late final _db = FirebaseFirestore.instance;
 
   CollectionReference<Map<String, dynamic>> get _interactions =>
       _db.collection('portfolio').doc(AuthService.instance.uid).collection('interactions');

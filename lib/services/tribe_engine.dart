@@ -22,7 +22,7 @@ class TribeEngine {
   TribeEngine._();
   static final instance = TribeEngine._();
 
-  final _db = FirebaseFirestore.instance;
+  late final _db = FirebaseFirestore.instance;
 
   DocumentReference<Map<String, dynamic>> get _tribeDoc =>
       _db.collection('users').doc(AuthService.instance.uid);

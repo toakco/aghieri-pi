@@ -13,7 +13,7 @@ class TaskService {
   TaskService._();
   static final instance = TaskService._();
 
-  final _db = FirebaseFirestore.instance;
+  late final _db = FirebaseFirestore.instance;
 
   CollectionReference<Map<String, dynamic>> get _tasks =>
       _db.collection('users').doc(AuthService.instance.uid).collection('tasks');
