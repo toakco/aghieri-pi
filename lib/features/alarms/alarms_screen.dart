@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/device_entry.dart';
+import '../../models/user_profile.dart';
 import '../../services/alarm_service.dart';
+import '../../services/music_service.dart';
+import '../../services/profile_service.dart';
 
 class AlarmsScreen extends StatefulWidget {
   const AlarmsScreen({super.key});
@@ -13,6 +17,15 @@ class AlarmsScreen extends StatefulWidget {
 
 class _AlarmsScreenState extends State<AlarmsScreen> {
   List<Alarm> get _alarms => AlarmService.instance.alarms;
+  UserProfile _profile = const UserProfile();
+
+  @override
+  void initState() {
+    super.initState();
+    ProfileService.instance.getProfile().then((p) {
+      if (mounted) setState(() => _profile = p);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +91,8 @@ class _AlarmsScreenState extends State<AlarmsScreen> {
       ),
       builder: (_) => _AlarmSheet(
         existing: editing,
+        devices: _profile.devices,
+        topicPlaylists: _profile.topicPlaylists,
         onSave: (alarm) async {
           if (editing != null) {
             await AlarmService.instance.delete(editing.id);
@@ -233,9 +248,16 @@ class _AlarmTile extends StatelessWidget {
 // ── Create / edit sheet ───────────────────────────────────────────────────────
 class _AlarmSheet extends StatefulWidget {
   final Alarm? existing;
+  final List<DeviceEntry> devices;
+  final Map<String, String> topicPlaylists;
   final void Function(Alarm) onSave;
 
-  const _AlarmSheet({this.existing, required this.onSave});
+  const _AlarmSheet({
+    this.existing,
+    required this.devices,
+    required this.topicPlaylists,
+    required this.onSave,
+  });
 
   @override
   State<_AlarmSheet> createState() => _AlarmSheetState();
@@ -246,6 +268,10 @@ class _AlarmSheetState extends State<_AlarmSheet> {
   late TextEditingController _labelCtrl;
   late Set<int> _days;
   late bool _isWakeUp;
+  late Set<String> _selectedDeviceIds;
+  String? _spotifyPlaylistId;
+  List<SpotifyPlaylistItem> _playlists = [];
+  bool _loadingPlaylists = false;
 
   static const _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   static const _wakeUpAmber = Color(0xFFFFA726);
@@ -260,6 +286,20 @@ class _AlarmSheetState extends State<_AlarmSheet> {
     _labelCtrl = TextEditingController(text: ex?.label ?? '');
     _days = ex != null ? Set<int>.from(ex.days) : {0, 1, 2, 3, 4};
     _isWakeUp = ex?.isWakeUp ?? false;
+    _selectedDeviceIds = Set<String>.from(ex?.deviceIds ?? []);
+    _spotifyPlaylistId = ex?.spotifyPlaylistId;
+    if (_isWakeUp) _loadPlaylists();
+  }
+
+  Future<void> _loadPlaylists() async {
+    if (_loadingPlaylists) return;
+    setState(() => _loadingPlaylists = true);
+    try {
+      final items = await MusicService.instance.getUserSpotifyPlaylists();
+      if (mounted) setState(() { _playlists = items; _loadingPlaylists = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingPlaylists = false);
+    }
   }
 
   @override
@@ -355,6 +395,18 @@ class _AlarmSheetState extends State<_AlarmSheet> {
           _buildWakeUpToggle(),
           const SizedBox(height: 16),
 
+          // Spotify wake-up music (wake-up alarms only)
+          if (_isWakeUp) ...[
+            _buildSpotifyPicker(),
+            const SizedBox(height: 16),
+          ],
+
+          // Device selector
+          if (widget.devices.isNotEmpty) ...[
+            _buildDeviceSelector(),
+            const SizedBox(height: 16),
+          ],
+
           // Day selector
           Text('Repeat', style: AghieriTextStyles.label()),
           const SizedBox(height: 10),
@@ -419,6 +471,8 @@ class _AlarmSheetState extends State<_AlarmSheet> {
                   time: TimeEntry(_time.hour, _time.minute),
                   days: _days.toList()..sort(),
                   isWakeUp: _isWakeUp,
+                  deviceIds: _selectedDeviceIds.toList(),
+                  spotifyPlaylistId: _spotifyPlaylistId,
                 );
                 widget.onSave(alarm);
                 Navigator.pop(context);
@@ -430,6 +484,156 @@ class _AlarmSheetState extends State<_AlarmSheet> {
       ),
     );
   }
+  Widget _buildSpotifyPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Wake-up music', style: AghieriTextStyles.label()),
+        const SizedBox(height: 10),
+        if (_loadingPlaylists)
+          const Center(
+            child: SizedBox(width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 1.5, color: AghieriColors.accent)),
+          )
+        else if (_playlists.isEmpty)
+          GestureDetector(
+            onTap: _loadPlaylists,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: AghieriColors.surfaceHigh,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.music_note_outlined,
+                      color: AghieriColors.textSecondary, size: 18),
+                  const SizedBox(width: 12),
+                  Text('Connect Spotify to choose wake-up music',
+                      style: AghieriTextStyles.caption()),
+                ],
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: 44,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _playlists.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final pl = _playlists[i];
+                final selected = _spotifyPlaylistId == pl.id;
+                return GestureDetector(
+                  onTap: () => setState(() =>
+                      _spotifyPlaylistId = selected ? null : pl.id),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFF1DB954).withOpacity(0.18)
+                          : AghieriColors.surfaceHigh,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: selected
+                            ? const Color(0xFF1DB954)
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.play_circle_outline,
+                            size: 14,
+                            color: selected
+                                ? const Color(0xFF1DB954)
+                                : AghieriColors.textSecondary),
+                        const SizedBox(width: 6),
+                        Text(pl.name,
+                            style: AghieriTextStyles.label(
+                              size: 12,
+                              color: selected
+                                  ? AghieriColors.textPrimary
+                                  : AghieriColors.textSecondary,
+                            )),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildDeviceSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Ring on', style: AghieriTextStyles.label()),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: widget.devices.map((device) {
+            final selected = _selectedDeviceIds.contains(device.id);
+            return GestureDetector(
+              onTap: () => setState(() {
+                selected
+                    ? _selectedDeviceIds.remove(device.id)
+                    : _selectedDeviceIds.add(device.id);
+              }),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? AghieriColors.accent.withOpacity(0.15)
+                      : AghieriColors.surfaceHigh,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: selected ? AghieriColors.accent : Colors.transparent,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _deviceIconForType(device.type),
+                      size: 14,
+                      color: selected
+                          ? AghieriColors.accent
+                          : AghieriColors.textSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(device.name,
+                        style: AghieriTextStyles.label(
+                          size: 12,
+                          color: selected
+                              ? AghieriColors.textPrimary
+                              : AghieriColors.textSecondary,
+                        )),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  IconData _deviceIconForType(String type) => switch (type) {
+    'phone'   => Icons.smartphone_outlined,
+    'laptop'  => Icons.laptop_mac_outlined,
+    'desktop' => Icons.desktop_mac_outlined,
+    'tablet'  => Icons.tablet_outlined,
+    _         => Icons.devices_outlined,
+  };
+
   Widget _buildWakeUpToggle() {
     return GestureDetector(
       onTap: () => setState(() => _isWakeUp = !_isWakeUp),

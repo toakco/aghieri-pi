@@ -2,25 +2,21 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users can only read/write their own profile
+    // Users can only read/write their own profile + subcollections
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
 
-    // Tasks belong to the owning user
-    match /tasks/{taskId} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == resource.data.userId;
-      allow create: if request.auth != null
-        && request.auth.uid == request.resource.data.userId;
-    }
+      // Tasks subcollection
+      match /tasks/{taskId} {
+        allow read, write, delete: if request.auth != null && request.auth.uid == uid;
+        allow create: if request.auth != null && request.auth.uid == uid;
+      }
 
-    // Alarms belong to the owning user
-    match /alarms/{alarmId} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == resource.data.userId;
-      allow create: if request.auth != null
-        && request.auth.uid == request.resource.data.userId;
+      // Alarms subcollection
+      match /alarms/{alarmId} {
+        allow read, write, delete: if request.auth != null && request.auth.uid == uid;
+        allow create: if request.auth != null && request.auth.uid == uid;
+      }
     }
 
     // Interaction tracking — user writes their own, no reads (server-side only)

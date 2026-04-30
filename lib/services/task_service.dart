@@ -28,25 +28,27 @@ class TaskService {
 
   // ── Read ───────────────────────────────────────────────────────────────────
 
-  /// Today's tasks: status != complete, ordered by scheduledTime.
+  /// Today's tasks: status != complete, filtered/sorted in Dart (no index needed).
   Future<List<TaskModel>> getTodayTasks() async {
     try {
       final today = DateTime.now();
       final dateStr =
           '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-      final snap = await _tasks
-          .where('status', isNotEqualTo: 'complete')
-          .get();
+      final snap = await _tasks.get();
+      debugPrint('[Tasks] getTodayTasks: fetched ${snap.docs.length} docs');
 
       final results = snap.docs
           .map(_fromDoc)
+          .where((t) => t.status != 'complete')
           .where((t) =>
               t.dueDate == null ||
+              t.dueDate!.isEmpty ||
               t.dueDate!.startsWith(dateStr) ||
               t.dueDate!.compareTo(dateStr) <= 0)
           .toList()
         ..sort((a, b) => (a.createdAt ?? '').compareTo(b.createdAt ?? ''));
+      debugPrint('[Tasks] getTodayTasks: returning ${results.length} tasks');
       return results;
     } catch (e) {
       debugPrint('[Tasks] getTodayTasks error: $e');
@@ -56,10 +58,11 @@ class TaskService {
 
   Future<List<TaskModel>> getAllTasks() async {
     try {
-      final snap = await _tasks
-          .orderBy('created_at', descending: true)
-          .get();
-      return snap.docs.map(_fromDoc).toList();
+      final snap = await _tasks.get();
+      debugPrint('[Tasks] getAllTasks: fetched ${snap.docs.length} docs');
+      final results = snap.docs.map(_fromDoc).toList()
+        ..sort((a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+      return results;
     } catch (e) {
       debugPrint('[Tasks] getAllTasks error: $e');
       return [];
@@ -81,11 +84,13 @@ class TaskService {
   Future<List<TaskModel>> _getTasksInRange(Duration range) async {
     try {
       final cutoff = DateTime.now().subtract(range).toIso8601String();
-      final snap = await _tasks
-          .where('created_at', isGreaterThanOrEqualTo: cutoff)
-          .orderBy('created_at', descending: true)
-          .get();
-      return snap.docs.map(_fromDoc).toList();
+      final snap = await _tasks.get();
+      final results = snap.docs
+          .map(_fromDoc)
+          .where((t) => (t.createdAt ?? '').compareTo(cutoff) >= 0)
+          .toList()
+        ..sort((a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+      return results;
     } catch (e) {
       debugPrint('[Tasks] _getTasksInRange error: $e');
       return [];
@@ -238,12 +243,11 @@ class TaskService {
       final dateStr =
           '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-      final snap = await _tasks
-          .where('status', whereIn: ['pending', 'active'])
-          .get();
+      final snap = await _tasks.get();
 
       for (final doc in snap.docs) {
         final task = _fromDoc(doc);
+        if (task.status != 'pending' && task.status != 'active') continue;
         if (task.dueDate != null && task.dueDate!.compareTo(dateStr) < 0) {
           // Task is overdue — mark for reschedule
           await _tasks.doc(task.id).update({
