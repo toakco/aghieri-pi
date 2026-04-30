@@ -372,7 +372,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       floatingActionButton: FloatingActionButton.small(
         heroTag: 'add',
-        onPressed: () => context.push('/tasks/new'),
+        onPressed: () => context.push('/tasks/new').then((_) => _load()),
         backgroundColor: AghieriColors.surface,
         child: const Icon(Icons.add, color: AghieriColors.textPrimary),
       ),
