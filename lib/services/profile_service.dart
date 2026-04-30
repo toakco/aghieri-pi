@@ -17,7 +17,7 @@ class ProfileService {
   static const _prefKey    = 'aghieri_profile';
   static const _onboardKey = 'aghieri_onboarded';
 
-  final _db = FirebaseFirestore.instance;
+  late final _db = FirebaseFirestore.instance;
 
   DocumentReference<Map<String, dynamic>> get _userDoc =>
       _db.collection('users').doc(AuthService.instance.uid);
