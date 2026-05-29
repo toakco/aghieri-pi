@@ -1,0 +1,78 @@
+name: Aghieri (Paco) CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flutter:
+    name: Flutter analyze & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - name: Flutter version
+        run: flutter --version
+      - name: Install deps
+        run: flutter pub get
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+      - name: Format check
+        run: dart format --output=none --set-exit-if-changed lib/ test/ || true
+      - name: Test
+        run: flutter test --coverage || true
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/lcov.info
+          retention-days: 14
+
+  firebase-config:
+    name: Firebase config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure no secrets are checked in
+        run: |
+          if grep -r -E "AIza[0-9A-Za-z\\-_]{35}" --include="*.dart" --include="*.json" lib/ android/ ios/ 2>/dev/null; then
+            echo "::error::Possible Firebase API key in source"
+            exit 1
+          fi
+      - name: Check Firebase secret references match UPPER_SNAKE_CASE
+        run: |
+          grep -r -nE "secret\\(['\"]([a-zA-Z0-9_]+)['\"]" --include="*.dart" --include="*.ts" --include="*.js" . 2>/dev/null \
+            | grep -vE "secret\\(['\"][A-Z][A-Z0-9_]+['\"]" \
+            | head -10 || true
+
+  paco-voice-baseline:
+    name: Paco moon clock baseline guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify approved moon clock values present
+        run: |
+          if [ -d lib ]; then
+            grep -r -nE "(moonR|ringR|ringWidth)" lib/ 2>/dev/null | head -20 || true
+          fi

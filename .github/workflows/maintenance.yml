@@ -1,0 +1,37 @@
+name: Aghieri Maintenance
+
+on:
+  schedule:
+    - cron: '0 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  pub-outdated:
+    name: pub outdated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - run: flutter pub get
+      - run: flutter pub outdated || true
+
+  stale:
+    name: Stale Issues/PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          stale-issue-message: 'Stale due to inactivity.'
+          stale-pr-message: 'Stale due to inactivity.'
+          days-before-stale: 30
+          days-before-close: 7
