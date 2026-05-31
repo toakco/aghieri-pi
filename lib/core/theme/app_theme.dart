@@ -215,3 +215,58 @@ class AghieriTheme {
     ),
   );
 }
+
+// ── Motion ────────────────────────────────────────────────────────────────────
+// Custom curves tuned for calm-tech feel. Default Material curves (easeInOut,
+// fastOutSlowIn) read as "app-like." These curves read as physical — things
+// settling, breathing, waking. Rooted in Weiser & Brown's calm-tech principle
+// that motion should sit in the periphery, never demand attention.
+class AghieriMotion {
+  // Decelerates like an object coming to rest. No overshoot, no bounce.
+  // Use for: cards landing, sheets settling, content arriving.
+  static const settle = Cubic(0.22, 0.61, 0.36, 1.0);
+
+  // Slow in, slow out — for ambient loops that should never feel mechanical.
+  // Use for: breathing rings, aurora drift, idle pulses.
+  static const breath = Cubic(0.45, 0.05, 0.55, 0.95);
+
+  // Soft start, gentle finish — for elements appearing into view.
+  // Use for: text fade-ins, button reveal, first paint after auth.
+  static const wake = Cubic(0.16, 0.84, 0.44, 1.0);
+
+  // Quick onset, soft tail — attention without alarm. ADHD-aware.
+  // Use for: voice state ring color shifts, task completion ack.
+  static const notice = Cubic(0.34, 1.12, 0.64, 1.0);
+
+  // Standard durations (named, not numeric, so intent is readable).
+  static const Duration glance = Duration(milliseconds: 180);
+  static const Duration ease   = Duration(milliseconds: 320);
+  static const Duration arrive = Duration(milliseconds: 540);
+  static const Duration breathe= Duration(milliseconds: 4200);
+}
+
+// ── Spacing ───────────────────────────────────────────────────────────────────
+// Named scale with intentional non-8px values. The 8px grid reads as
+// engineered; small deviations (14, 22, 30) read as hand-tuned. Each value
+// is named for the moment it creates, not its pixel count.
+class AghieriSpacing {
+  static const double hair    = 4;   // hairline gap between related glyphs
+  static const double tight   = 10;  // intra-component padding
+  static const double breath  = 14;  // between label and field (off-grid)
+  static const double rest    = 22;  // between sibling sections (off-grid)
+  static const double gather  = 30;  // between unrelated groups (off-grid)
+  static const double horizon = 44;  // top/bottom screen breathing room
+  static const double silence = 72;  // hero-only — empty space as a feature
+}
+
+// ── Radii ─────────────────────────────────────────────────────────────────────
+// Varied corner radii break the "every card is 16px" AI-default look.
+// Smaller surfaces (buttons, chips) get tighter corners; larger surfaces
+// (sheets, content boxes) get broader corners. Mirrors how physical objects
+// scale their fillets to their mass.
+class AghieriRadii {
+  static const double tight  = 10;  // buttons, chips, inputs
+  static const double soft   = 14;  // mid cards, list items
+  static const double gentle = 18;  // primary content surfaces
+  static const double broad  = 22;  // sheets, dialogs, hero panels
+}
