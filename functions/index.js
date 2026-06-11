@@ -296,7 +296,7 @@ exports.voiceCommand = onCall(
       throw new HttpsError("invalid-argument", "messages or transcript required.");
     }
 
-    const apiKey = process.env.ANTHROPIC_KEY || request.data.claudeKey;
+    const apiKey = process.env.ANTHROPIC_KEY;
     if (!apiKey) throw new HttpsError("failed-precondition", "No Claude API key configured.");
 
     const client = new Anthropic.default({ apiKey });
@@ -408,7 +408,7 @@ exports.textToSpeech = onCall(
 
     const text    = request.data.text;
     const voiceId = request.data.voiceId || "iLVmqjzCGGvqtMCk6vVQ";
-    const elevenLabsKey = process.env.ELEVENLABS_API_KEY || request.data.elevenLabsKey;
+    const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
 
     if (!text || typeof text !== "string") {
       throw new HttpsError("invalid-argument", "text required.");
